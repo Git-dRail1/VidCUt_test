@@ -1,307 +1,138 @@
-import os
-import subprocess
-import tempfile
-import shutil
+from flask import Flask, request, jsonify, render_template_string
 import yt_dlp
-from flask import Flask, request, send_file, render_template_string, jsonify
-from yt_dlp import YoutubeDL
-from yt_dlp.utils import download_range_func
+import os
 
 app = Flask(__name__)
 
-DOWNLOADS_DIR = os.path.join(os.path.dirname(__file__), "downloads")
-os.makedirs(DOWNLOADS_DIR, exist_ok=True)
-
-
-# ------------ Helpers ------------
-
-def parse_hhmmss(time_str: str) -> float:
-    """Convert 'HH:MM:SS' (or 'H:MM:SS') to seconds."""
-    try:
-        parts = time_str.strip().split(":")
-        if len(parts) != 3:
-            raise ValueError("Time must be in HH:MM:SS format")
-        h, m, s = parts
-        return int(h) * 3600 + int(m) * 60 + int(s)
-    except Exception as e:
-        raise ValueError(f"Invalid time value '{time_str}': {e}")
-
-
-INDEX_HTML = """
+# Simple HTML UI embedded for easy single-file deployment or reference
+HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>My Video Cutter</title>
-  <style>
-    body { font-family: Arial, sans-serif; max-width: 600px; margin: 40px auto; }
-    label { display: block; margin-top: 10px; }
-    input[type="text"], input[type="number"] { width: 100%; padding: 8px; }
-    button { margin-top: 20px; padding: 10px 16px; }
-    .note { font-size: 0.9em; color: #555; margin-top: 10px; }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Media Extractor</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; background-color: #f9f9f9; color: #333; }
+        .container { background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h1 { margin-top: 0; color: #111; }
+        input[type="text"] { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        button { background-color: #0070f3; color: white; padding: 12px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; width: 100%; }
+        button:hover { background-color: #0051a8; }
+        .result-box { margin-top: 20px; display: none; }
+        .stream-item { background: #f0f0f0; padding: 12px; margin: 8px 0; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; }
+        .stream-link { background: #0070f3; color: white; padding: 6px 12px; text-decoration: none; border-radius: 4px; font-size: 14px; }
+        #loading { display: none; color: #666; font-style: italic; margin-top: 10px; }
+    </style>
 </head>
 <body>
-  <h1>Online Video Cutter</h1>
-  <form id="cut-form" method="POST" action="/cut">
-    <label>Video URL</label>
-    <input type="text" name="url" placeholder="Paste video link" required>
+    <div class="container">
+        <h1>Media Stream Extractor</h1>
+        <p>Enter a video page URL to extract direct download links or HLS (.m3u8) playlists.</p>
+        <input type="text" id="videoUrl" placeholder="https://example.com/video-page">
+        <button onclick="extractMedia()">Extract Links</button>
+        <div id="loading">Analyzing page and extracting streams...</div>
+        
+        <div id="resultBox" class="result-box">
+            <h3>Available Streams Found:</h3>
+            <div id="linksContainer"></div>
+        </div>
+    </div>
 
-    <label>Start time (HH:MM:SS)</label>
-    <input type="text"
-           name="start"
-           placeholder="00:00:00"
-           value="00:00:00"
-           pattern="^[0-9]{1,2}:[0-9]{2}:[0-9]{2}$"
-           required>
-
-    <label>End time (HH:MM:SS)</label>
-    <input type="text"
-           name="end"
-           placeholder="00:01:30"
-           value="00:00:01"
-           pattern="^[0-9]{1,2}:[0-9]{2}:[0-9]{2}$"
-           required>
-    
-    <label>Video resolution (advanced)</label>
-    <select name="resolution">
-      <option value="480" selected>Original resolution</option>
-      <option value="360">360p (640x360)</option>
-      <option value="480">480p (854x480)</option>
-      <option value="720">720p (1280x720)</option>
-      <option value="1080">1080p (1920x1080)</option>
-    </select>
-    
-    <p class="note">
-      -----------------------------------------------------------
-    </p>   
-    
-    <button type="submit">Cut</button>
- 
-    <p class="note">
-      <a href="{{ url_for('list_downloads') }}">View saved downloads</a>
-    </p>   
-    
-    <p class="note">
-      Xhamster,Xvideo,Xnxx,Pornhub.
-    </p>
-  </form>
-
-  <form id="clear-form" method="POST" action="{{ url_for('clear_downloads') }}" style="margin-top:20px;">
-    <button type="submit" style="background:#c62828;color:#fff;">
-      Clear Downloads Folder
-    </button>
-  </form>  
-  
     <script>
-      (function() {
-        var cutForm = document.getElementById('cut-form');
-        if (cutForm) {
-          cutForm.addEventListener('submit', function (e) {
-            e.preventDefault();
+        async function extractMedia() {
+            const urlInput = document.getElementById('videoUrl').value;
+            const loading = document.getElementById('loading');
+            const resultBox = document.getElementById('resultBox');
+            const container = document.getElementById('linksContainer');
+            
+            if (!urlInput) return alert('Please enter a URL');
+            
+            loading.style.display = 'block';
+            resultBox.style.display = 'none';
+            container.innerHTML = '';
 
-            var formData = new FormData(cutForm);
-
-            fetch('/cut', {
-              method: 'POST',
-              body: formData
-            })
-            .then(function(res) {
-              return res.json().then(function(data) {
-                return { ok: res.ok, data: data };
-              });
-            })
-            .then(function(result) {
-              if (result.ok && result.data.status === 'ok') {
-                alert('Cut finished. Go to "View saved downloads" to download the file. Cut file: ' + result.data.cut_file);
-              } else {
-                alert('Error: ' + (result.data && result.data.message ? result.data.message : 'Unknown error'));
-              }
-            })
-            .catch(function(err) {
-              alert('Network error: ' + err);
-            });
-          });
+            try {
+                const response = await fetch('/extract', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: urlInput })
+                });
+                const data = await response.json();
+                
+                loading.style.display = 'none';
+                
+                if (data.error) {
+                    alert('Error: ' + data.error);
+                    return;
+                }
+                
+                if (data.formats.length === 0) {
+                    container.innerHTML = '<p>No direct media formats detected.</p>';
+                } else {
+                    data.formats.forEach(format => {
+                        const div = document.createElement('div');
+                        div.className = 'stream-item';
+                        div.innerHTML = `
+                            <div>
+                                <strong>[${format.ext.toUpperCase()}]</strong> - ${format.resolution || 'Audio/Unknown'} (${format.note || 'Direct Link'})
+                            </div>
+                            <a href="${format.url}" target="_blank" rel="noopener noreferrer" class="stream-link">Open / Download</a>
+                        `;
+                        container.appendChild(div);
+                    });
+                }
+                resultBox.style.display = 'block';
+            } catch (err) {
+                loading.style.display = 'none';
+                alert('Failed to connect to backend extractor.');
+            }
         }
-
-        var clearForm = document.getElementById('clear-form');
-        if (clearForm) {
-          clearForm.addEventListener('submit', function (e) {
-            e.preventDefault();
-
-            fetch('/clear-downloads', {
-              method: 'POST'
-            })
-            .then(function(res) {
-              return res.json().then(function(data) {
-                return { ok: res.ok, data: data };
-              });
-            })
-            .then(function(result) {
-              if (result.ok && result.data.status === 'ok') {
-                alert(result.data.message || 'Downloads folder cleared.');
-              } else {
-                alert('Error: ' + (result.data && result.data.message ? result.data.message : 'Unknown error'));
-              }
-            })
-            .catch(function(err) {
-              alert('Network error: ' + err);
-            });
-          });
-        }
-      })();
     </script>
-  
 </body>
 </html>
 """
 
-@app.route("/", methods=["GET"])
-def index():
-    return render_template_string(INDEX_HTML)
+@app.route('/')
+def home():
+    return render_template_string(HTML_TEMPLATE)
 
-@app.route("/cut", methods=["POST"])
-def cut():
-    url = request.form.get("url", "").strip()
-    start_str = request.form.get("start", "").strip()
-    end_str = request.form.get("end", "").strip()
-    resolution = request.form.get("resolution", "0").strip()
-
-    if not url:
-        return "Missing URL", 400
-    if not start_str or not end_str:
-        return "Missing start or end time.", 400
-        
-    try:
-        start_sec = parse_hhmmss(start_str)
-        end_sec = parse_hhmmss(end_str)
-        if end_sec <= start_sec:
-            return "End time must be greater than start time.", 400
-    except ValueError as e:
-        return str(e), 400
-            
-    resolution_int = int(resolution)
-        
-    with tempfile.TemporaryDirectory() as tmpdir:
-        input_path = os.path.join(tmpdir, "%(title)s.%(ext)s")
-        ydl_opts = {
-            #"format": f'bestvideo[height={resolution}]+bestaudio/best',
-            #"format": f"[height<={resolution}]/[height<=720]",
-            "format": f"[height={resolution}]",
-            "merge_output_format": 'mp4',
-            "outtmpl": input_path,
-            #"download_ranges": yt_dlp.utils.download_range_func([], [[start_sec, end_sec]]),
-            #"force_keyframes_at_cuts": True,
-            #'listformats': True,
-        }
-
-        try:
-            with YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-        except Exception as e:
-            return f"Download error: {e}", 500
-
-        # Get the actual file path from info_dict
-        filename = f"{info['title']}.{info['ext']}"
-        orgFile_path = os.path.join(tmpdir, filename)
-        print("DL File Path: "+orgFile_path)
-        #output_path = info.get("_filename")
-        #if not orgFile_path or not os.path.isfile(filename):
-            #return "Downloaded file not found.", 500
-
-        # Use the final file name for download_name (nice for the user)
-        download_name = os.path.basename(filename)
-        output_path = os.path.join(DOWNLOADS_DIR,("cut"+download_name))
-        
-        ffmpeg_cmd = [
-            "ffmpeg",
-            "-y",
-            "-ss", str(start_sec),
-            "-i", orgFile_path,
-            "-to", str(end_sec),
-            "-c", "copy",
-            output_path,
-        ]
-        print("Cuted File Path: "+output_path)
-        try:
-            subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        except subprocess.CalledProcessError as e:
-            return f"FFmpeg error: {e}", 500
-
-        saved_original_path = os.path.join(DOWNLOADS_DIR, download_name)
-        os.replace(orgFile_path, saved_original_path)
-        print("Org file Moved to Path: "+saved_original_path)
-        return jsonify({
-            "status": "ok",
-            "cut_file": "cut" + download_name,
-            "original_file": download_name
-        }), 200
-        # return send_file(
-            # output_path,
-            # as_attachment=True,
-            # download_name=("cut"+download_name),
-            # mimetype="video/mp4",
-        #)
-@app.route("/downloads", methods=["GET"])
-def list_downloads():
-    files = []
-    if os.path.isdir(DOWNLOADS_DIR):
-        files = sorted(os.listdir(DOWNLOADS_DIR))
-    html = """
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <title>Saved Downloads</title>
-      <style>
-        body { font-family: Arial, sans-serif; max-width: 600px; margin: 40px auto; }
-        ul { list-style: none; padding: 0; }
-        li { margin: 6px 0; }
-        a { text-decoration: none; color: #1976d2; }
-      </style>
-    </head>
-    <body>
-      <h1>Downloads folder</h1>
-      <ul>
-        {% for f in files %}
-          <li><a href="{{ url_for('download_file', filename=f) }}">{{ f }}</a></li>
-        {% endfor %}
-      </ul>
-      <p><a href="{{ url_for('index') }}">Back to cutter</a></p>
-    </body>
-    </html>
-    """
-    return render_template_string(html, files=files)
-
-@app.route("/download/<path:filename>", methods=["GET"])
-def download_file(filename):
-    path = os.path.join(DOWNLOADS_DIR, filename)
-    if not os.path.isfile(path):
-        return "File not found.", 404
-    return send_file(
-        path,
-        as_attachment=True,
-        download_name=filename
-    )
+@app.route('/extract', methods=['POST'])
+def extract():
+    data = request.get_json()
+    target_url = data.get('url')
     
-@app.route("/clear-downloads", methods=["POST"])
-def clear_downloads():
-    try:
-        if not os.path.isdir(DOWNLOADS_DIR):
-            return "Downloads folder does not exist.", 404
+    if not target_url:
+        return jsonify({'error': 'No URL provided'}), 400
 
-        # Delete all files and subfolders in downloads
-        for name in os.listdir(DOWNLOADS_DIR):
-            path = os.path.join(DOWNLOADS_DIR, name)
-            if os.path.isfile(path) or os.path.islink(path):
-                os.unlink(path)
-            elif os.path.isdir(path):
-                shutil.rmtree(path)
+    ydl_opts = {
+        'extract_flat': False,
+        'skip_download': True,  # We only want the links, not to store the gigabytes of video on your server
+    }
 
-        return jsonify({"status": "ok", "message": "Downloads folder cleared."}), 200
+    try {
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(target_url, download=False)
+            
+            formats_found = []
+            if 'formats' in info:
+                for f in info['formats']:
+                    # Filter for typical web layouts or manifest streams
+                    formats_found.append({
+                        'url': f.get('url'),
+                        'ext': f.get('ext', 'unknown'),
+                        'resolution': f.get('format_note') or f.get('resolution'),
+                        'note': 'HLS/Manifest' if 'm3u8' in f.get('url', '') else 'Direct File'
+                    })
+            
+            return jsonify({
+                'title': info.get('title', 'Unknown Title'),
+                'formats': formats_found[:20]  # Cap at top 20 variants to keep UI clean
+            })
+            
     except Exception as e:
-        return jsonify({"status": "error", "message": f"Error clearing downloads: {e}"}), 500
-        
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+        return jsonify({'error': str(e)}), 500
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)

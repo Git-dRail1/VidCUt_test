@@ -1,3 +1,2 @@
-flask
-yt-dlp
-gunicorn
+Flask==3.0.3
+yt-dlp==2026.03.02
