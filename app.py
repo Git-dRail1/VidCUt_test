@@ -19,7 +19,7 @@ HTML_TEMPLATE = """
     <title>Authenticated Media Processor</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 600px; margin: 40px auto; padding: 0 20px; background-color: #f4f7f6; color: #333; }
-        .container { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); position: relative; }
+        .container { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 20px; }
         h2 { margin-top: 0; color: #111; }
         p { color: #666; font-size: 14px; margin-bottom: 20px; }
         label { font-weight: bold; display: block; margin-top: 15px; margin-bottom: 5px; }
@@ -35,6 +35,16 @@ HTML_TEMPLATE = """
         #errorBox { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
         .download-btn { display: inline-block; background-color: #0284c7; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px; font-weight: bold; margin-top: 10px; }
         .download-btn:hover { background-color: #0369a1; }
+        
+        /* Saved Files Section Styling */
+        .library-box { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+        .library-box h3 { margin-top: 0; color: #222; border-bottom: 2px solid #f0fdf4; padding-bottom: 8px; }
+        .file-list { list-style: none; padding: 0; margin: 0; }
+        .file-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #eee; font-size: 14px; }
+        .file-item:last-child { border-bottom: none; }
+        .file-link { color: #0284c7; font-weight: bold; text-decoration: none; }
+        .file-link:hover { text-decoration: underline; }
+        .no-files { color: #888; font-style: italic; font-size: 14px; }
     </style>
 </head>
 <body>
@@ -67,7 +77,40 @@ HTML_TEMPLATE = """
         <div id="errorBox" class="status-box"></div>
     </div>
 
+    <!-- Persistent Saved Files Display -->
+    <div class="library-box">
+        <h3>Saved Video Files On Server</h3>
+        <ul id="fileList" class="file-list">
+            <!-- Files loaded via JavaScript on page mount -->
+        </ul>
+    </div>
+
     <script>
+        // Load files immediately when the page displays
+        window.addEventListener('DOMContentLoaded', refreshFileList);
+
+        async function refreshFileList() {
+            const listContainer = document.getElementById('fileList');
+            try {
+                const response = await fetch('/list-files');
+                const files = await response.json();
+                
+                if (files.length === 0) {
+                    listContainer.innerHTML = '<li class="no-files">No media files currently stored on the server.</li>';
+                    return;
+                }
+                
+                listContainer.innerHTML = files.map(file => `
+                    <li class="file-item">
+                        <span>📄 ${file.name} <small style="color:#888;">(${file.size})</small></span>
+                        <a href="${file.url}" class="file-link" target="_blank">Download</a>
+                    </li>
+                `).join('');
+            } catch(e) {
+                listContainer.innerHTML = '<li class="no-files" style="color:#ef4444;">Failed to read download folder index.</li>';
+            }
+        }
+
         async function processMedia() {
             const url = document.getElementById('streamUrl').value;
             const res = document.getElementById('targetRes').value;
@@ -97,6 +140,7 @@ HTML_TEMPLATE = """
                 } else {
                     status.innerHTML = `<strong>Success!</strong><br>${data.message}<br><br><a href="${data.download_url}" class="download-btn" target="_blank">📥 Download ${data.filename}</a>`;
                     status.style.display = 'block';
+                    refreshFileList(); // Automatically sync file list view on complete
                 }
             } catch(e) {
                 status.style.display = 'none';
@@ -111,6 +155,7 @@ HTML_TEMPLATE = """
                 const response = await fetch('/clear-storage', { method: 'POST' });
                 const data = await response.json();
                 alert(data.message || data.error);
+                refreshFileList(); // Instantly update view to confirm deletion
             } catch(e) {
                 alert("Failed to communicate clear command to server.");
             }
@@ -123,6 +168,25 @@ HTML_TEMPLATE = """
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE)
+
+@app.route('/list-files', methods=['GET'])
+def list_files():
+    files_info = []
+    try:
+        for filename in os.listdir(DOWNLOAD_FOLDER):
+            file_path = os.path.join(DOWNLOAD_FOLDER, filename)
+            if os.path.isfile(file_path) and filename.endswith('.mp4'):
+                # Format file size human-readably
+                bytes_size = os.path.getsize(file_path)
+                size_mb = bytes_size / (1024 * 1024)
+                files_info.append({
+                    'name': filename,
+                    'size': f"{size_mb:.1f} MB",
+                    'url': f'/get-file/{filename}'
+                })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    return jsonify(files_info)
 
 @app.route('/process', methods=['POST'])
 def process():
@@ -137,7 +201,6 @@ def process():
 
     # Sanitize and compile final output name
     if user_filename:
-        # Strip extension if written out by user, clear invalid symbols
         user_filename = os.path.splitext(user_filename)[0]
         user_filename = "".join([c for c in user_filename if c.isalpha() or c.isdigit() or c in (' ', '_', '-')]).strip()
         output_filename = f"{user_filename}.mp4"
@@ -235,7 +298,6 @@ def get_file(filename):
 @app.route('/clear-storage', methods=['POST'])
 def clear_storage():
     try:
-        # Delete download directory and rebuild it fresh
         if os.path.exists(DOWNLOAD_FOLDER):
             shutil.rmtree(DOWNLOAD_FOLDER)
         os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
