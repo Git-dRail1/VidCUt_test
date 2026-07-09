@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify, render_template_string
 import yt_dlp
 import os
-import re
 
 app = Flask(__name__)
 
@@ -106,19 +105,10 @@ def extract():
     if not target_url:
         return jsonify({'error': 'No URL provided'}), 400
 
-    # Spoof headers and settings to push past ad walls & anti-bot traps
     ydl_opts = {
         'extract_flat': False,
         'skip_download': True,
-        'playlist_items': '1',
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Referer': target_url,  # Crucial for bypassing structural security walls
-        },
-        'ignoreerrors': True,
-        'no_warnings': True,
+        'playlist_items': '1', # If it's a playlist/index page, focus on extracting the primary item
     }
 
     try:
@@ -126,61 +116,37 @@ def extract():
             info = ydl.extract_info(target_url, download=False)
             formats_found = []
             
-            # Helper to clear out ad frames and catch real media
-            def is_valid_media(url_str):
-                if not url_str:
-                    return False
-                # Filter out obvious ad networks, trackers, and page ads
-                ad_keywords = ['trafficdeposit', 'popads', 'exoclick', 'adsystem', 'doubleclick', 'analytics']
-                if any(ad in url_str.lower() for ad in ad_keywords):
-                    return False
-                # Keep direct video formats, media subdomains, or streaming manifests
-                return any(ext in url_str.lower() for ext in ['.mp4', '.vid', '.m3u8', '.webm', '.flv', 'trafficdeposit.com/widi/'])
-
+            # Helper function to parse format blocks safely
             def parse_formats(source_info):
                 extracted = []
                 if 'formats' in source_info:
                     for f in source_info['formats']:
-                        u = f.get('url')
-                        if u and is_valid_media(u):
+                        if f.get('url'):
                             extracted.append({
-                                'url': u,
-                                'ext': f.get('ext', 'mp4'),
-                                'resolution': f.get('format_note') or f.get('resolution') or 'HD Stream',
-                                'note': 'HLS/Manifest' if 'm3u8' in u else 'Direct Video File'
+                                'url': f.get('url'),
+                                'ext': f.get('ext', 'unknown'),
+                                'resolution': f.get('format_note') or f.get('resolution') or 'Default',
+                                'note': 'HLS/Manifest' if 'm3u8' in f.get('url', '') else 'Direct File'
                             })
                 return extracted
 
-            # 1. Look for direct video links
+            # Case 1: Direct video object found
             if 'formats' in info and len(info['formats']) > 0:
                 formats_found = parse_formats(info)
             
-            # 2. Look for valid formats nested inside the layout's primary entries
-            if not formats_found and 'entries' in info:
-                for entry in info['entries']:
-                    if entry and 'formats' in entry:
-                        formats_found.extend(parse_formats(entry))
-                    elif entry and entry.get('url') and is_valid_media(entry.get('url')):
-                        formats_found.append({
-                            'url': entry.get('url'),
-                            'ext': entry.get('ext', 'mp4'),
-                            'resolution': 'Source Link',
-                            'note': 'Direct Video Link'
-                        })
-
-            # 3. Last Resort: Force find trafficdeposit direct video links hidden in raw text fields
-            if not formats_found:
-                raw_text = str(info)
-                # Matches the pattern your specific file uses
-                matches = re.findall(r'https?://[^\s"\']+\.vid', raw_text)
-                for match in set(matches):
-                    if is_valid_media(match):
-                        formats_found.append({
-                            'url': match,
-                            'ext': 'mp4',
-                            'resolution': 'Extracted Video Stream',
-                            'note': 'Bypassed Ad Frame'
-                        })
+            # Case 2: Nested entries (Playlist or Multi-video index detected in logs)
+            elif 'entries' in info and len(info['entries']) > 0:
+                first_entry = info['entries'][0]
+                # Sometimes entries are flat summaries; if full format data is missing, we use its URL
+                if 'formats' in first_entry:
+                    formats_found = parse_formats(first_entry)
+                elif first_entry.get('url'):
+                    formats_found.append({
+                        'url': first_entry.get('url'),
+                        'ext': first_entry.get('ext', 'mp4'),
+                        'resolution': 'Detected Entry Link',
+                        'note': 'Extracted Entry URL'
+                    })
 
             return jsonify({
                 'title': info.get('title', 'Extracted Media'),
