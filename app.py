@@ -3,6 +3,7 @@ import os
 import subprocess
 import json
 import shutil
+import re
 
 app = Flask(__name__)
 
@@ -78,11 +79,11 @@ HTML_TEMPLATE = """
         <div class="time-group">
             <div class="time-field">
                 <label for="startTime">Start Time (Optional):</label>
-                <input type="text" id="startTime" placeholder="hh:mm:ss" value="00:00:00">
+                <input type="text" id="startTime" placeholder="00:01:20 (hh:mm:ss)">
             </div>
             <div class="time-field">
                 <label for="endTime">End Time (Optional):</label>
-                <input type="text" id="endTime" placeholder="hh:mm:ss"value="00:00:01">
+                <input type="text" id="endTime" placeholder="00:03:45 (hh:mm:ss)">
             </div>
         </div>
 
@@ -257,15 +258,12 @@ def process():
         if os.path.exists(path):
             os.remove(path)
 
-    # Validate timestamp format configuration (hh:mm:ss)
+    # Validate timestamp format configuration (hh:mm:ss) using Python's re module
     time_regex = r'^\d{2}:\d{2}:\d{2}$'
     run_cutting = False
     if start_time or end_time:
-        if (start_time and not json.dumps(start_time).match(time_regex)) or (end_time and not json.dumps(end_time).match(time_regex)):
-            # Fallback text check logic
-            import re
-            if (start_time and not re.match(time_regex, start_time)) or (end_time and not re.match(time_regex, end_time)):
-                return jsonify({'error': 'Timestamps must use strict HH:MM:SS layout configurations.'}), 400
+        if (start_time and not re.match(time_regex, start_time)) or (end_time and not re.match(time_regex, end_time)):
+            return jsonify({'error': 'Timestamps must use strict HH:MM:SS format.'}), 400
         run_cutting = True
 
     # Compile custom browser headers to feed into FFmpeg
@@ -332,7 +330,7 @@ def process():
         msg = f"Full video processed and saved as '{full_filename}'."
         
         if run_cutting:
-            # We cut from the local saved file to make the extraction super accurate and lightning fast
+            # Cut from the local file for perfect accuracy and blazing fast speed
             cut_cmd = ['ffmpeg', '-y', '-i', full_output_path]
             if start_time:
                 cut_cmd.extend(['-ss', start_time])
