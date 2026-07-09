@@ -107,17 +107,16 @@ def extract():
 
     ydl_opts = {
         'extract_flat': False,
-        'skip_download': True,  # We only want the links, not to store the gigabytes of video on your server
+        'skip_download': True,
     }
 
-    try {
+    try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(target_url, download=False)
             
             formats_found = []
             if 'formats' in info:
                 for f in info['formats']:
-                    # Filter for typical web layouts or manifest streams
                     formats_found.append({
                         'url': f.get('url'),
                         'ext': f.get('ext', 'unknown'),
@@ -127,7 +126,7 @@ def extract():
             
             return jsonify({
                 'title': info.get('title', 'Unknown Title'),
-                'formats': formats_found[:20]  # Cap at top 20 variants to keep UI clean
+                'formats': formats_found[:20]
             })
             
     except Exception as e:
