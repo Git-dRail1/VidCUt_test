@@ -1,92 +1,87 @@
-from flask import Flask, request, jsonify, render_template_string
-import yt_dlp
+from flask import Flask, request, jsonify, render_template_string, send_from_directory
 import os
-import re
+import subprocess
+import json
 
 app = Flask(__name__)
 
-# Simple HTML UI embedded for easy single-file deployment or reference
+# Configure a local download folder
+DOWNLOAD_FOLDER = os.path.join(os.getcwd(), 'downloads')
+os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Web Media Extractor</title>
+    <title>Media Processor</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; background-color: #f9f9f9; color: #333; }
-        .container { background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-        h1 { margin-top: 0; color: #111; }
-        input[type="text"] { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
-        button { background-color: #0070f3; color: white; padding: 12px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; width: 100%; }
-        button:hover { background-color: #0051a8; }
-        .result-box { margin-top: 20px; display: none; }
-        .stream-item { background: #f0f0f0; padding: 12px; margin: 8px 0; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; }
-        .stream-link { background: #0070f3; color: white; padding: 6px 12px; text-decoration: none; border-radius: 4px; font-size: 14px; }
-        #loading { display: none; color: #666; font-style: italic; margin-top: 10px; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 600px; margin: 40px auto; padding: 0 20px; background-color: #f4f7f6; color: #333; }
+        .container { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+        h2 { margin-top: 0; }
+        label { font-weight: bold; display: block; margin-top: 15px; margin-bottom: 5px; }
+        input[type="text"], select { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; font-size: 14px; }
+        button { background-color: #10b981; color: white; padding: 14px; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; width: 100%; margin-top: 20px; font-weight: bold; }
+        button:hover { background-color: #059669; }
+        .status-box { margin-top: 20px; padding: 15px; border-radius: 6px; display: none; background: #f0fdf4; border: 1px solid #bbf7d0; }
+        #errorBox { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Media Stream Extractor</h1>
-        <p>Enter a video page URL to extract direct download links or HLS (.m3u8) playlists.</p>
-        <input type="text" id="videoUrl" placeholder="https://example.com/video-page">
-        <button onclick="extractMedia()">Extract Links</button>
-        <div id="loading">Analyzing page and extracting streams...</div>
+        <h2>Direct Media Downloader & Converter</h2>
+        <p>Paste the direct stream link grabbed by FetchV below.</p>
         
-        <div id="resultBox" class="result-box">
-            <h3>Available Streams Found:</h3>
-            <div id="linksContainer"></div>
-        </div>
+        <label for="streamUrl">FetchV Direct Link:</label>
+        <input type="text" id="streamUrl" placeholder="https://.../stream.mp4 or .m3u8">
+        
+        <label for="targetRes">Target Resolution:</label>
+        <select id="targetRes">
+            <option value="1080">1080p (Full HD)</option>
+            <option value="720">720p (HD)</option>
+            <option value="480">480p (Standard)</option>
+        </select>
+        
+        <button onclick="processMedia()">Process & Download</button>
+        
+        <div id="statusBox" class="status-box">Processing... Please wait. This can take a few minutes for conversion.</div>
+        <div id="errorBox" class="status-box"></div>
     </div>
 
     <script>
-        async function extractMedia() {
-            const urlInput = document.getElementById('videoUrl').value;
-            const loading = document.getElementById('loading');
-            const resultBox = document.getElementById('resultBox');
-            const container = document.getElementById('linksContainer');
+        async function processMedia() {
+            const url = document.getElementById('streamUrl').value;
+            const res = document.getElementById('targetRes').value;
+            const status = document.getElementById('statusBox');
+            const errorBox = document.getElementById('errorBox');
             
-            if (!urlInput) return alert('Please enter a URL');
+            if(!url) return alert('Please paste a media URL.');
             
-            loading.style.display = 'block';
-            resultBox.style.display = 'none';
-            container.innerHTML = '';
-
+            status.style.display = 'block';
+            status.innerText = "Analyzing stream and processing file on your server...";
+            errorBox.style.display = 'none';
+            
             try {
-                const response = await fetch('/extract', {
+                const response = await fetch('/process', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url: urlInput })
+                    body: JSON.stringify({ url: url, resolution: res })
                 });
                 const data = await response.json();
                 
-                loading.style.display = 'none';
-                
-                if (data.error) {
-                    alert('Error: ' + data.error);
-                    return;
-                }
-                
-                if (data.formats.length === 0) {
-                    container.innerHTML = '<p>No direct media formats detected.</p>';
+                status.style.display = 'none';
+                if(data.error) {
+                    errorBox.innerText = data.error;
+                    errorBox.style.display = 'block';
                 } else {
-                    data.formats.forEach(format => {
-                        const div = document.createElement('div');
-                        div.className = 'stream-item';
-                        div.innerHTML = `
-                            <div>
-                                <strong>[${format.ext.toUpperCase()}]</strong> - ${format.resolution || 'Audio/Unknown'} (${format.note || 'Direct Link'})
-                            </div>
-                            <a href="${format.url}" target="_blank" rel="noopener noreferrer" class="stream-link">Open / Download</a>
-                        `;
-                        container.appendChild(div);
-                    });
+                    status.innerHTML = `<strong>Success!</strong> ${data.message}<br><br><a href="${data.download_url}" target="_blank" style="color:#059669; font-weight:bold;">👉 Click Here to Download .MP4</a>`;
+                    status.style.display = 'block';
                 }
-                resultBox.style.display = 'block';
-            } catch (err) {
-                loading.style.display = 'none';
-                alert('Failed to connect to backend extractor.');
+            } catch(e) {
+                status.style.display = 'none';
+                errorBox.innerText = "Server communication error.";
+                errorBox.style.display = 'block';
             }
         }
     </script>
@@ -95,100 +90,77 @@ HTML_TEMPLATE = """
 """
 
 @app.route('/')
-def home():
+def index():
     return render_template_string(HTML_TEMPLATE)
 
-@app.route('/extract', methods=['POST'])
-def extract():
+@app.route('/process', methods=['POST'])
+def process():
     data = request.get_json()
-    target_url = data.get('url')
+    stream_url = data.get('url')
+    target_res = int(data.get('resolution', 1080))
     
-    if not target_url:
-        return jsonify({'error': 'No URL provided'}), 400
-
-    # Spoof headers and settings to push past ad walls & anti-bot traps
-    ydl_opts = {
-        'extract_flat': False,
-        'skip_download': True,
-        'playlist_items': '1',
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Referer': target_url,  # Crucial for bypassing structural security walls
-        },
-        'ignoreerrors': True,
-        'no_warnings': True,
-    }
-
+    if not stream_url:
+        return jsonify({'error': 'Missing URL'}), 400
+        
+    output_filename = "processed_video.mp4"
+    output_path = os.path.join(DOWNLOAD_FOLDER, output_filename)
+    
+    # Clean up old file if it exists
+    if os.path.exists(output_path):
+        os.remove(output_path)
+        
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(target_url, download=False)
-            formats_found = []
+        # Step 1: Probe the link using ffprobe to detect the source height (resolution)
+        probe_cmd = [
+            'ffprobe', '-v', 'error', '-select_streams', 'v:0', 
+            '-show_entries', 'stream=height', '-of', 'json', stream_url
+        ]
+        probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
+        probe_data = json.loads(probe_result.stdout)
+        
+        source_res = 0
+        if 'streams' in probe_data and len(probe_data['streams']) > 0:
+            source_res = int(probe_data['streams'][0].get('height', 0))
             
-            # Helper to clear out ad frames and catch real media
-            def is_valid_media(url_str):
-                if not url_str:
-                    return False
-                # Filter out obvious ad networks, trackers, and page ads
-                ad_keywords = ['trafficdeposit', 'popads', 'exoclick', 'adsystem', 'doubleclick', 'analytics']
-                if any(ad in url_str.lower() for ad in ad_keywords):
-                    return False
-                # Keep direct video formats, media subdomains, or streaming manifests
-                return any(ext in url_str.lower() for ext in ['.mp4', '.vid', '.m3u8', '.webm', '.flv', 'trafficdeposit.com/widi/'])
+        print(f"Detected Source Resolution Height: {source_res}p. Target: {target_res}p.")
 
-            def parse_formats(source_info):
-                extracted = []
-                if 'formats' in source_info:
-                    for f in source_info['formats']:
-                        u = f.get('url')
-                        if u and is_valid_media(u):
-                            extracted.append({
-                                'url': u,
-                                'ext': f.get('ext', 'mp4'),
-                                'resolution': f.get('format_note') or f.get('resolution') or 'HD Stream',
-                                'note': 'HLS/Manifest' if 'm3u8' in u else 'Direct Video File'
-                            })
-                return extracted
+        # Step 2: Build FFmpeg Command based on resolution matchup
+        # If resolutions match or probing fails, we copy the stream without re-encoding to save time/CPU
+        if source_res == target_res or source_res == 0:
+            print("Resolutions match or source resolution undetected. Downloading stream directly...")
+            ffmpeg_cmd = [
+                'ffmpeg', '-y', '-i', stream_url, 
+                '-c', 'copy', '-bsf:a', 'aac_adtstoasc', output_path
+            ]
+            msg = f"Downloaded directly matching your source height ({source_res}p)."
+        else:
+            print(f"Resolution mismatch. Transcoding stream to {target_res}p...")
+            # Scale video height while maintaining original aspect ratio automatically
+            scale_filter = f"scale=-2:{target_res}"
+            ffmpeg_cmd = [
+                'ffmpeg', '-y', '-i', stream_url,
+                '-vf', scale_filter, '-c:v', 'libx264', '-crf', '23', 
+                '-c:a', 'aac', '-b:a', '128k', output_path
+            ]
+            msg = f"Transcoded successfully from {source_res}p down to your requested {target_res}p configuration."
 
-            # 1. Look for direct video links
-            if 'formats' in info and len(info['formats']) > 0:
-                formats_found = parse_formats(info)
+        # Run compilation
+        result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            return jsonify({'error': f"FFmpeg processing failed: {result.stderr}"}), 500
             
-            # 2. Look for valid formats nested inside the layout's primary entries
-            if not formats_found and 'entries' in info:
-                for entry in info['entries']:
-                    if entry and 'formats' in entry:
-                        formats_found.extend(parse_formats(entry))
-                    elif entry and entry.get('url') and is_valid_media(entry.get('url')):
-                        formats_found.append({
-                            'url': entry.get('url'),
-                            'ext': entry.get('ext', 'mp4'),
-                            'resolution': 'Source Link',
-                            'note': 'Direct Video Link'
-                        })
+        return jsonify({
+            'message': msg,
+            'download_url': f'/get-file/{output_filename}'
+        })
 
-            # 3. Last Resort: Force find trafficdeposit direct video links hidden in raw text fields
-            if not formats_found:
-                raw_text = str(info)
-                # Matches the pattern your specific file uses
-                matches = re.findall(r'https?://[^\s"\']+\.vid', raw_text)
-                for match in set(matches):
-                    if is_valid_media(match):
-                        formats_found.append({
-                            'url': match,
-                            'ext': 'mp4',
-                            'resolution': 'Extracted Video Stream',
-                            'note': 'Bypassed Ad Frame'
-                        })
-
-            return jsonify({
-                'title': info.get('title', 'Extracted Media'),
-                'formats': formats_found[:20]
-            })
-            
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/get-file/<filename>')
+def get_file(filename):
+    return send_from_directory(DOWNLOAD_FOLDER, filename, as_attachment=True)
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
