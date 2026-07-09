@@ -79,11 +79,11 @@ HTML_TEMPLATE = """
         <div class="time-group">
             <div class="time-field">
                 <label for="startTime">Start Time (Optional):</label>
-                <input type="text" id="startTime" placeholder="00:01:20 (hh:mm:ss)">
+                <input type="text" id="startTime" placeholder="hh:mm:ss" value="00:00:00">
             </div>
             <div class="time-field">
                 <label for="endTime">End Time (Optional):</label>
-                <input type="text" id="endTime" placeholder="00:03:45 (hh:mm:ss)">
+                <input type="text" id="endTime" placeholder="hh:mm:ss" value="00:00:01">
             </div>
         </div>
 
@@ -101,7 +101,7 @@ HTML_TEMPLATE = """
 
     <!-- Persistent Saved Files Display -->
     <div class="library-box">
-        <h3>Saved Video Files On Server</h3>
+        <h3>Saved Video Files On Server <small style="font-weight: normal; font-size: 12px; color: #666;">(Newest First)</small></h3>
         <ul id="fileList" class="file-list">
             <!-- Files loaded via JavaScript dynamically -->
         </ul>
@@ -212,16 +212,27 @@ def list_files():
     files_info = []
     try:
         if os.path.exists(DOWNLOAD_FOLDER):
+            # Fetch all files with their structural metadata properties
+            raw_files = []
             for filename in os.listdir(DOWNLOAD_FOLDER):
                 file_path = os.path.join(DOWNLOAD_FOLDER, filename)
                 if os.path.isfile(file_path) and filename.endswith('.mp4'):
-                    bytes_size = os.path.getsize(file_path)
-                    size_mb = bytes_size / (1024 * 1024)
-                    files_info.append({
-                        'name': filename,
-                        'size': f"{size_mb:.1f} MB",
-                        'url': f'/get-file/{filename}'
-                    })
+                    # Capture modification time timestamp along with file properties
+                    mtime = os.path.getmtime(file_path)
+                    raw_files.append((filename, file_path, mtime))
+            
+            # Sort raw_files array by modification timestamp (mtime) descending (newest first)
+            raw_files.sort(key=lambda x: x[2], reverse=True)
+            
+            # Form clean UI array packages
+            for filename, file_path, _ in raw_files:
+                bytes_size = os.path.getsize(file_path)
+                size_mb = bytes_size / (1024 * 1024)
+                files_info.append({
+                    'name': filename,
+                    'size': f"{size_mb:.1f} MB",
+                    'url': f'/get-file/{filename}'
+                })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
     return jsonify(files_info)
@@ -374,3 +385,4 @@ def clear_storage():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
+    
