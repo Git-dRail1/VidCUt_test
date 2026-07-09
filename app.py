@@ -191,8 +191,6 @@ def process():
         return jsonify({
             'message': msg,
             'download_url': f'/get-file/{output_filename}'  # <--- FIXED
-})
-})
         })
 
     except Exception as e:
