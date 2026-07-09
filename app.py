@@ -108,24 +108,48 @@ def extract():
     ydl_opts = {
         'extract_flat': False,
         'skip_download': True,
+        'playlist_items': '1', # If it's a playlist/index page, focus on extracting the primary item
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(target_url, download=False)
-            
             formats_found = []
-            if 'formats' in info:
-                for f in info['formats']:
-                    formats_found.append({
-                        'url': f.get('url'),
-                        'ext': f.get('ext', 'unknown'),
-                        'resolution': f.get('format_note') or f.get('resolution'),
-                        'note': 'HLS/Manifest' if 'm3u8' in f.get('url', '') else 'Direct File'
-                    })
             
+            # Helper function to parse format blocks safely
+            def parse_formats(source_info):
+                extracted = []
+                if 'formats' in source_info:
+                    for f in source_info['formats']:
+                        if f.get('url'):
+                            extracted.append({
+                                'url': f.get('url'),
+                                'ext': f.get('ext', 'unknown'),
+                                'resolution': f.get('format_note') or f.get('resolution') or 'Default',
+                                'note': 'HLS/Manifest' if 'm3u8' in f.get('url', '') else 'Direct File'
+                            })
+                return extracted
+
+            # Case 1: Direct video object found
+            if 'formats' in info and len(info['formats']) > 0:
+                formats_found = parse_formats(info)
+            
+            # Case 2: Nested entries (Playlist or Multi-video index detected in logs)
+            elif 'entries' in info and len(info['entries']) > 0:
+                first_entry = info['entries'][0]
+                # Sometimes entries are flat summaries; if full format data is missing, we use its URL
+                if 'formats' in first_entry:
+                    formats_found = parse_formats(first_entry)
+                elif first_entry.get('url'):
+                    formats_found.append({
+                        'url': first_entry.get('url'),
+                        'ext': first_entry.get('ext', 'mp4'),
+                        'resolution': 'Detected Entry Link',
+                        'note': 'Extracted Entry URL'
+                    })
+
             return jsonify({
-                'title': info.get('title', 'Unknown Title'),
+                'title': info.get('title', 'Extracted Media'),
                 'formats': formats_found[:20]
             })
             
