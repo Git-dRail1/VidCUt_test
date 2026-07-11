@@ -105,11 +105,11 @@ HTML_TEMPLATE = """
         <div id="timeGroupContainer" class="time-group">
             <div class="time-field">
                 <label for="startTime">Start Time:</label>
-                <input type="text" id="startTime" placeholder="00:01:20 (hh:mm:ss)">
+                <input type="text" id="startTime" placeholder="hh:mm:ss" value="00:00:00">
             </div>
             <div class="time-field">
                 <label for="endTime">End Time:</label>
-                <input type="text" id="endTime" placeholder="00:03:45 (hh:mm:ss)">
+                <input type="text" id="endTime" placeholder="hh:mm:ss" value="00:00:01">
             </div>
         </div>
 
