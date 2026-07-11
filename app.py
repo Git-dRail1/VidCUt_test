@@ -27,9 +27,24 @@ HTML_TEMPLATE = """
         input[type="text"], select, textarea { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; font-size: 14px; background-color: #fff; font-family: inherit; }
         textarea { height: 80px; resize: vertical; }
         
+        /* Toggle Switch Control Custom Styling */
+        .toggle-wrapper { display: flex; align-items: center; justify-content: space-between; margin-top: 20px; padding: 10px 0; border-top: 1px dashed #eee; border-bottom: 1px dashed #eee; }
+        .toggle-label { font-weight: bold; font-size: 14px; }
+        .switch { position: relative; display: inline-block; width: 50px; height: 26px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .3s; border-radius: 34px; }
+        .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 4px; bottom: 4px; background-color: white; transition: .3s; border-radius: 50%; }
+        input:checked + .slider { background-color: #7c3aed; }
+        input:checked + .slider:before { transform: translateX(24px); }
+        
         /* Time Split Grid */
-        .time-group { display: flex; gap: 15px; margin-top: 5px; }
+        .time-group { display: none; gap: 15px; margin-top: 5px; animation: fadeIn 0.2s ease-in-out; }
         .time-field { flex: 1; }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
         
         .btn-group { display: flex; gap: 10px; margin-top: 25px; }
         button { color: white; padding: 14px; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; font-weight: bold; transition: background 0.2s; }
@@ -48,7 +63,9 @@ HTML_TEMPLATE = """
         
         /* Saved Files Section Styling */
         .library-box { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
-        .library-box h3 { margin-top: 0; color: #222; border-bottom: 2px solid #f0fdf4; padding-bottom: 8px; }
+        .library-header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #f0fdf4; padding-bottom: 8px; margin-bottom: 12px; }
+        .library-box h3 { margin: 0; color: #222; }
+        .storage-badge { background: #e2e8f0; color: #475569; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: bold; }
         .file-list { list-style: none; padding: 0; margin: 0; }
         .file-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #eee; font-size: 14px; }
         .file-item:last-child { border-bottom: none; }
@@ -75,15 +92,24 @@ HTML_TEMPLATE = """
             <option value="480" selected>480p (Standard)</option>
         </select>
 
-        <!-- Video Trimming Segment -->
-        <div class="time-group">
+        <!-- Dynamic Selectable Cutting Toggle Logic -->
+        <div class="toggle-wrapper">
+            <span class="toggle-label">Enable Trim / Cut Segment</span>
+            <label class="switch">
+                <input type="checkbox" id="enableCut" onchange="toggleCuttingFields()">
+                <span class="slider"></span>
+            </label>
+        </div>
+
+        <!-- Video Trimming Segment Box Containers -->
+        <div id="timeGroupContainer" class="time-group">
             <div class="time-field">
-                <label for="startTime">Start Time (Optional):</label>
-                <input type="text" id="startTime" placeholder="hh:mm:ss" value="00:00:00">
+                <label for="startTime">Start Time:</label>
+                <input type="text" id="startTime" placeholder="00:01:20 (hh:mm:ss)">
             </div>
             <div class="time-field">
-                <label for="endTime">End Time (Optional):</label>
-                <input type="text" id="endTime" placeholder="hh:mm:ss" value="00:00:01">
+                <label for="endTime">End Time:</label>
+                <input type="text" id="endTime" placeholder="00:03:45 (hh:mm:ss)">
             </div>
         </div>
 
@@ -101,7 +127,13 @@ HTML_TEMPLATE = """
 
     <!-- Persistent Saved Files Display -->
     <div class="library-box">
-        <h3>Saved Video Files On Server <small style="font-weight: normal; font-size: 12px; color: #666;">(Newest First)</small></h3>
+        <div class="library-header">
+            <div>
+                <h3>Saved Video Files On Server</h3>
+                <small style="font-size: 12px; color: #666;">Sorted by: Newest First</small>
+            </div>
+            <span id="storageBadge" class="storage-badge">Used Storage: 0.0 MB</span>
+        </div>
         <ul id="fileList" class="file-list">
             <!-- Files loaded via JavaScript dynamically -->
         </ul>
@@ -110,12 +142,23 @@ HTML_TEMPLATE = """
     <script>
         window.addEventListener('DOMContentLoaded', refreshFileList);
 
+        function toggleCuttingFields() {
+            const checked = document.getElementById('enableCut').checked;
+            const targetBox = document.getElementById('timeGroupContainer');
+            targetBox.style.display = checked ? 'flex' : 'none';
+        }
+
         async function refreshFileList() {
             const listContainer = document.getElementById('fileList');
+            const storageBadge = document.getElementById('storageBadge');
             try {
                 const response = await fetch('/list-files');
-                const files = await response.json();
+                const data = await response.json();
                 
+                // Update persistent storage tracker layout calculations metrics metric
+                storageBadge.innerText = `Used Storage: ${data.total_storage_mb} MB`;
+                
+                const files = data.files;
                 if (files.length === 0) {
                     listContainer.innerHTML = '<li class="no-files">No media files currently stored on the server.</li>';
                     return;
@@ -136,8 +179,9 @@ HTML_TEMPLATE = """
             const url = document.getElementById('streamUrl').value;
             const res = document.getElementById('targetRes').value;
             const filename = document.getElementById('customFilename').value;
-            const startTime = document.getElementById('startTime').value;
-            const endTime = document.getElementById('endTime').value;
+            const isCutEnabled = document.getElementById('enableCut').checked;
+            const startTime = isCutEnabled ? document.getElementById('startTime').value : "";
+            const endTime = isCutEnabled ? document.getElementById('endTime').value : "";
             const headersText = document.getElementById('customHeaders').value;
             const status = document.getElementById('statusBox');
             const errorBox = document.getElementById('errorBox');
@@ -210,24 +254,23 @@ def index():
 @app.route('/list-files', methods=['GET'])
 def list_files():
     files_info = []
+    total_bytes = 0
     try:
         if os.path.exists(DOWNLOAD_FOLDER):
-            # Fetch all files with their structural metadata properties
             raw_files = []
             for filename in os.listdir(DOWNLOAD_FOLDER):
                 file_path = os.path.join(DOWNLOAD_FOLDER, filename)
                 if os.path.isfile(file_path) and filename.endswith('.mp4'):
-                    # Capture modification time timestamp along with file properties
                     mtime = os.path.getmtime(file_path)
-                    raw_files.append((filename, file_path, mtime))
+                    f_size = os.path.getsize(file_path)
+                    total_bytes += f_size
+                    raw_files.append((filename, file_path, mtime, f_size))
             
             # Sort raw_files array by modification timestamp (mtime) descending (newest first)
             raw_files.sort(key=lambda x: x[2], reverse=True)
             
-            # Form clean UI array packages
-            for filename, file_path, _ in raw_files:
-                bytes_size = os.path.getsize(file_path)
-                size_mb = bytes_size / (1024 * 1024)
+            for filename, file_path, _, f_size in raw_files:
+                size_mb = f_size / (1024 * 1024)
                 files_info.append({
                     'name': filename,
                     'size': f"{size_mb:.1f} MB",
@@ -235,7 +278,12 @@ def list_files():
                 })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-    return jsonify(files_info)
+        
+    total_storage_mb = f"{(total_bytes / (1024 * 1024)):.1f}"
+    return jsonify({
+        'files': files_info,
+        'total_storage_mb': total_storage_mb
+    })
 
 @app.route('/process', methods=['POST'])
 def process():
@@ -341,14 +389,12 @@ def process():
         msg = f"Full video processed and saved as '{full_filename}'."
         
         if run_cutting:
-            # Cut from the local file for perfect accuracy and blazing fast speed
             cut_cmd = ['ffmpeg', '-y', '-i', full_output_path]
             if start_time:
                 cut_cmd.extend(['-ss', start_time])
             if end_time:
                 cut_cmd.extend(['-to', end_time])
                 
-            # Copy codecs instantly without re-encoding since resolution scaling is already handled
             cut_cmd.extend(['-c', 'copy', cut_output_path])
             
             cut_result = subprocess.run(cut_cmd, capture_output=True, text=True)
@@ -385,4 +431,3 @@ def clear_storage():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
-    
